@@ -1,0 +1,13 @@
+// SAT Rigging Tools Collection - installer
+// Drag and drop this file into the Maya viewport.
+
+global proc satRiggingToolsInstallerLocation() {}
+
+{
+    string $where = `whatIs satRiggingToolsInstallerLocation`;
+    string $file = `substitute "^Mel procedure found in: " $where ""`;
+    string $dir = dirname($file);
+    python("import sys, importlib; sys.path.insert(0, r'" + $dir + "'); "
+         + "import sat_installer; importlib.reload(sat_installer); "
+         + "sat_installer.install(r'" + $dir + "')");
+}

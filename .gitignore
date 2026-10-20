@@ -1,0 +1,6 @@
+# Local-only files: never commit tokens or per-user settings
+github_token.txt
+**/github_token.txt
+rigging_tools_config.json
+.cloud_cache/
+__pycache__/
