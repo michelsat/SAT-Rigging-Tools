@@ -23,8 +23,7 @@ button to your current shelf, and opens the tools window.
 ## 3. Sign in
 
 Click **Sign In...** at the bottom of the window, paste your access key and
-click **Sign In**. If Maya asks for the **tools server address**, paste the
-one the owner gave you. The key is checked straight away, and your tools then
+click **Sign In**. The key is checked straight away, and your tools then
 appear.
 
 Next time, just click the **SAT** shelf button. You can also run this in the
