@@ -23,7 +23,7 @@ SPLIT_OPTION_VAR = "rtc_settings_split"
 # Access key server (Cloudflare Worker, see server/README.md in the private repo).
 # Users who sign in with an access key (sat_...) load the tools through it and
 # never get GitHub access. Can be overridden per computer with the optionVar.
-SERVER_URL = ""
+SERVER_URL = "https://sat-tools.michelsatishss.workers.dev"
 SERVER_OPTION_VAR = "rtc_server_url"
 ACCESS_KEY_PREFIX = "sat_"
 
