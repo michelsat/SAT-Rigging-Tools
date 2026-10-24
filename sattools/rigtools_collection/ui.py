@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 import json
 import types
@@ -19,6 +20,16 @@ TOKEN_FILE_NAME = "github_token.txt"
 RAW_URL_PATTERN = re.compile(
     r"^https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/(?:refs/heads/)?([^/]+)/(.+)$")
 SPLIT_OPTION_VAR = "rtc_settings_split"
+# Access key server (Cloudflare Worker, see server/README.md in the private repo).
+# Users who sign in with an access key (sat_...) load the tools through it and
+# never get GitHub access. Can be overridden per computer with the optionVar.
+SERVER_URL = ""
+SERVER_OPTION_VAR = "rtc_server_url"
+ACCESS_KEY_PREFIX = "sat_"
+
+
+def is_access_key(credential):
+  return bool(credential) and credential.startswith(ACCESS_KEY_PREFIX)
 
 
 # ---------------------------------------------------------------- button styling
@@ -124,7 +135,26 @@ def _api_get(url, token, timeout=10):
     with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout) as response:
       return response.status, json.loads(response.read().decode("utf-8") or "null")
   except urllib.error.HTTPError as e:
-    return e.code, None
+    try:
+      body = json.loads(e.read().decode("utf-8") or "null")
+    except Exception:
+      body = None
+    return e.code, body
+
+
+def check_access_key(key, server_url):
+  """Asks the access key server who this key belongs to. Returns (ok, message, info)."""
+  if not server_url:
+    return False, "No access key server is configured.", None
+  try:
+    status, data = _api_get(server_url + "/whoami", key)
+  except Exception as e:
+    return False, f"Could not reach the tools server: {getattr(e, 'reason', e)}", None
+  if status == 200 and isinstance(data, dict):
+    cache = "allowed" if data.get("offline_cache") else "not allowed"
+    return True, f"Access key OK (user: {data.get('user')}, offline cache {cache}).", data
+  reason = (data or {}).get("error") if isinstance(data, dict) else None
+  return False, reason or f"The tools server refused the key (HTTP {status}).", None
 
 
 def check_github_token(token, manifest_url):
@@ -163,7 +193,15 @@ def check_github_token(token, manifest_url):
     return False, f"Could not reach GitHub to test the token: {getattr(e, 'reason', e)}"
 
 
-def _describe_http_error(error, has_token):
+def _describe_http_error(error, has_token, key_mode=False):
+  if isinstance(error, urllib.error.HTTPError) and key_mode:
+    try:
+      reason = json.loads(error.read().decode("utf-8")).get("error")
+    except Exception:
+      reason = None
+    if error.code in (401, 403):
+      return f"HTTP {error.code}: {reason or 'the access key was refused'} Sign out, then sign in with a valid key."
+    return f"HTTP {error.code}: {reason or error.reason}"
   if isinstance(error, urllib.error.HTTPError):
     if error.code == 404 and not has_token:
       return "HTTP 404: the repository is private. Click 'Sign In...' and paste a token."
@@ -241,12 +279,43 @@ class RiggingToolsCollection:
     if os.path.exists(self.cache_dir):
       shutil.rmtree(self.cache_dir, ignore_errors=True)
 
+  @property
+  def key_mode(self):
+    return is_access_key(self.GITHUB_TOKEN)
+
+  def server_url(self):
+    url = cmds.optionVar(query=SERVER_OPTION_VAR) if cmds.optionVar(exists=SERVER_OPTION_VAR) else ""
+    return (url or SERVER_URL or "").strip().rstrip("/")
+
+  def _check_key_permissions(self):
+    """Access key users: the server decides who may use the tools and the cache."""
+    self.access_error = ""
+    try:
+      status, data = _api_get(self.server_url() + "/whoami", self.GITHUB_TOKEN)
+    except Exception:
+      return False                       # offline
+    self.permissions_online = True
+    if status == 200 and isinstance(data, dict):
+      self.login = str(data.get("user") or "unknown")
+      self.permissions = {"allowed": True, "offline_cache": bool(data.get("offline_cache"))}
+    else:
+      self.access_error = (data or {}).get("error", "") if isinstance(data, dict) else ""
+      self.permissions = {"allowed": False, "offline_cache": False}
+    return True
+
   def check_permissions(self):
-    """Reads the owner's access.json and applies it: who may use the tools
-    and who may keep an offline copy of them on this computer."""
+    """Applies the owner's rules: who may use the tools and who may keep an
+    offline copy on this computer. Access keys are checked by the server;
+    GitHub tokens by access.json in the repository."""
     self.login = None
     policy = None
     self.permissions_online = False
+    self.access_error = ""
+    if self.key_mode:
+      if not self._check_key_permissions():
+        self.permissions = {"allowed": True, "offline_cache": os.path.isdir(self.cache_dir)}
+      self._apply_cache_rules()
+      return
     if self.GITHUB_TOKEN:
       try:
         status, user = _api_get("https://api.github.com/user", self.GITHUB_TOKEN)
@@ -271,7 +340,9 @@ class RiggingToolsCollection:
       # Offline: only keep using a cache that an earlier online check allowed
       # (a cache is wiped as soon as the owner disallows it).
       self.permissions = {"allowed": True, "offline_cache": os.path.isdir(self.cache_dir)}
+    self._apply_cache_rules()
 
+  def _apply_cache_rules(self):
     if not self.permissions["allowed"] or not self.permissions["offline_cache"]:
       self._wipe_cache()
     self.use_cache = bool(self.user_prefers_cache and self.permissions["offline_cache"])
@@ -281,13 +352,16 @@ class RiggingToolsCollection:
 
   def _access_label(self):
     if not self.GITHUB_TOKEN:
-      return "Signed out  |  click 'Sign In...' and paste your GitHub token to load the tools"
-    who = self.login or "unknown account"
+      return "Signed out  |  click 'Sign In...' and paste your access key to load the tools"
+    who = self.login or ("unknown user" if self.key_mode else "unknown account")
+    kind = "User" if self.key_mode else "Account"
     if not self.permissions["allowed"]:
+      if self.key_mode:
+        return f"Access key refused  |  {self.access_error or 'ask the tools owner for a valid key'}"
       return f"Account: {who}  |  NOT APPROVED by the tools owner"
     cache = "allowed" if self.permissions["offline_cache"] else "disabled by owner"
     online = "" if self.permissions_online else "  |  offline"
-    return f"Account: {who}  |  Offline cache: {cache}{online}"
+    return f"{kind}: {who}  |  Offline cache: {cache}{online}"
 
   def _update_access_ui(self):
     if cmds.text("rtcAccessText", exists=True):
@@ -388,19 +462,42 @@ class RiggingToolsCollection:
     if not self.GITHUB_TOKEN:
       cmds.inViewMessage(amg=f"Signed out of {who}", pos="midCenter", fade=True)
 
+  def _ask_server_url(self):
+    result = cmds.promptDialog(
+        title="Tools Server",
+        message="Paste the tools server address you got from the tools owner\n(for example https://sat-tools.yourname.workers.dev):",
+        text=self.server_url(), button=["OK", "Cancel"], defaultButton="OK",
+        cancelButton="Cancel", dismissString="Cancel")
+    if result != "OK":
+      return ""
+    url = cmds.promptDialog(query=True, text=True).strip().rstrip("/")
+    if url:
+      cmds.optionVar(stringValue=(SERVER_OPTION_VAR, url))
+    return url
+
   def set_github_token(self, *args):
     result = cmds.promptDialog(
-        title="GitHub Token",
-        message=("Paste a GitHub personal access token with read access to the\n"
-                 "Rigging-Tools-Collection repository (fine-grained: Contents = Read-only).\n"
-                 "It is stored in your Maya preferences on this computer.\n"
-                 "Leave empty and click Save to remove the stored token."),
-        text="", button=["Save", "Cancel"], defaultButton="Save",
+        title="Sign In",
+        message=("Paste the access key you got from the tools owner (starts with 'sat_').\n"
+                 "The tools owner can also paste a GitHub token here.\n"
+                 "It is stored in your Maya preferences on this computer."),
+        text="", button=["Sign In", "Cancel"], defaultButton="Sign In",
         cancelButton="Cancel", dismissString="Cancel")
-    if result != "Save":
+    if result != "Sign In":
       return
     token = _clean_token(cmds.promptDialog(query=True, text=True))
-    if token:
+    if is_access_key(token):
+      server = self.server_url() or self._ask_server_url()
+      if not server:
+        return cmds.warning("An access key needs the tools server address. Ask the tools owner for it.")
+      ok, message, _ = check_access_key(token, server)
+      print(f"[Rigging Tools] Access key check: {message}")
+      if not ok:
+        cmds.confirmDialog(title="Sign In Problem", message=message, button=["OK"])
+        return
+      cmds.optionVar(stringValue=(TOKEN_OPTION_VAR, token))
+      cmds.inViewMessage(amg="Signed in", pos="midCenter", fade=True)
+    elif token:
       ok, message = check_github_token(token, self.MANIFEST_URL)
       print(f"[Rigging Tools] Token check: {message}")
       if ok:
@@ -421,9 +518,18 @@ class RiggingToolsCollection:
     self.refresh_content()
 
   def _download_text(self, url, timeout):
-    """Downloads a file from the repo. With a token, goes through the GitHub
-    API, which serves private repositories; without one, uses the raw URL."""
-    if self.GITHUB_TOKEN:
+    """Downloads a file from the repo. With an access key it goes through the
+    tools server; with a GitHub token through the GitHub API (private repos);
+    without either, the raw URL."""
+    if self.key_mode:
+      match = RAW_URL_PATTERN.match(url or "")
+      server = self.server_url()
+      if not match or not server:
+        raise urllib.error.URLError("no tools server configured for access keys")
+      path = match.groups()[3]
+      url = server + "/file/" + urllib.parse.quote(path)
+      headers = {"Authorization": f"Bearer {self.GITHUB_TOKEN}", "User-Agent": "RiggingToolsCollection"}
+    elif self.GITHUB_TOKEN:
       url = _github_api_url(url)
       headers = {
           "Authorization": f"Bearer {self.GITHUB_TOKEN}",
@@ -441,8 +547,12 @@ class RiggingToolsCollection:
     """Loads the tool list. Returns True if it came from the server."""
     self.tool_scripts = {}
     if not self.permissions["allowed"]:
-      cmds.warning(f"Your GitHub account ({self.login or 'unknown'}) is not approved to use these tools. "
-                   "Ask the tools owner to add you to access.json.")
+      if self.key_mode:
+        cmds.warning(f"Your access key was refused: {self.access_error or 'unknown key'} "
+                     "Ask the tools owner for a valid key.")
+      else:
+        cmds.warning(f"Your GitHub account ({self.login or 'unknown'}) is not approved to use these tools. "
+                     "Ask the tools owner to add you to access.json.")
       return False
     manifest_cache = os.path.join(self.cache_dir, "manifest.json")
     data = {}
@@ -460,7 +570,7 @@ class RiggingToolsCollection:
           f.write(raw_text)
 
     except Exception as e:
-      cmds.warning(f"Could not load the tool list from GitHub - {_describe_http_error(e, bool(self.GITHUB_TOKEN))}")
+      cmds.warning(f"Could not load the tool list from GitHub - {_describe_http_error(e, bool(self.GITHUB_TOKEN), self.key_mode)}")
       if self.use_cache and os.path.exists(manifest_cache):
         try:
           with open(manifest_cache, "r", encoding="utf-8") as f:
@@ -520,7 +630,7 @@ class RiggingToolsCollection:
           with open(cached_tool_path, "w", encoding="utf-8") as f:
             f.write(source_code)
         except Exception as e:
-          return cmds.warning(f"Download failed for {module_name} - {_describe_http_error(e, bool(self.GITHUB_TOKEN))}")
+          return cmds.warning(f"Download failed for {module_name} - {_describe_http_error(e, bool(self.GITHUB_TOKEN), self.key_mode)}")
 
       try:
         with open(cached_tool_path, "r", encoding="utf-8") as f:
@@ -541,7 +651,7 @@ class RiggingToolsCollection:
         mod.__dict__["__name__"] = "__main__"
         exec(compile(source_code, f"<cloud>/{module_name}", "exec"), mod.__dict__)
       except Exception as e:
-        return cmds.warning(f"Streaming failed for {module_name} - {_describe_http_error(e, bool(self.GITHUB_TOKEN))}")
+        return cmds.warning(f"Streaming failed for {module_name} - {_describe_http_error(e, bool(self.GITHUB_TOKEN), self.key_mode)}")
 
     for entry in ("main", "run", "show_ui"):
       fn = getattr(mod, entry, None)

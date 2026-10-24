@@ -1,25 +1,16 @@
 # SAT Rigging Tools Collection
 
 The Maya launcher for the SAT Rigging Tools Collection. This repository holds
-only the window you open in Maya. The tools themselves live in a **private**
-repository and are loaded after you sign in, so you need an invitation from the
-owner.
+only the window you open in Maya. The tools themselves are private and load
+after you sign in with an **access key** from the owner.
 
 Works with Maya 2022 and later (Python 3).
 
-## 1. Get access
+## 1. Get an access key
 
-1. Create a free GitHub account if you don't have one.
-2. Ask the owner (**michelsat**) to invite your GitHub account to the tools
-   repository. Accept the invitation from your GitHub notifications or email.
-3. Create a token on GitHub: **Settings → Developer settings → Personal access
-   tokens → Fine-grained tokens → Generate new token**
-   - **Resource owner:** `michelsat`
-   - **Repository access:** Only select repositories → `Rigging-Tools-Collection`
-   - **Repository permissions → Contents:** Read-only
-   - **Expiration:** your choice (for example 90 days)
-
-   Copy the token. Never share it or paste it into chats or files.
+Ask the owner (**michelsat**) for an access key. It looks like `sat_Xy3...`.
+Keep it to yourself: anyone with your key can use the tools as you, and the
+owner can switch it off at any time.
 
 ## 2. Install
 
@@ -31,9 +22,10 @@ button to your current shelf, and opens the tools window.
 
 ## 3. Sign in
 
-Click **Sign In...** at the bottom of the window, paste your token and click
-**Save**. The token is checked straight away, and if something is wrong the
-message says what to fix. Your tools then appear.
+Click **Sign In...** at the bottom of the window, paste your access key and
+click **Sign In**. If Maya asks for the **tools server address**, paste the
+one the owner gave you. The key is checked straight away, and your tools then
+appear.
 
 Next time, just click the **SAT** shelf button. You can also run this in the
 Script Editor (Python tab):
@@ -53,7 +45,7 @@ rtc.launch_rigging_tools_collection()
 
 ## Signing out / shared computers
 
-Click **Sign Out** in the window. This removes your token and the offline copy
+Click **Sign Out** in the window. This removes your key and the offline copy
 of the tools from that computer.
 
 ## Uninstall
@@ -69,8 +61,7 @@ The Script Editor shows the exact reason when tools don't load:
 
 | Message | Fix |
 |---|---|
-| repository is private / click 'Sign In...' | Sign in with your token |
-| HTTP 401 | The token is wrong or expired. Sign out and sign in with a new one |
-| cannot see Rigging-Tools-Collection | Accept the invitation, and check the token's resource owner and repository |
-| cannot read its files | Set the token's **Contents** permission to Read-only |
-| NOT APPROVED by the tools owner | Ask the owner to allow your account |
+| Unknown access key | Check that you pasted the whole key (no spaces) |
+| disabled by the owner / expired | Ask the owner to switch it on again or give you a new key |
+| no tools server configured | Sign out, sign in again and enter the server address |
+| Could not reach the tools server | Check your internet connection |
