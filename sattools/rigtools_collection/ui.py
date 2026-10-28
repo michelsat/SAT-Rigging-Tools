@@ -566,7 +566,7 @@ class RiggingToolsCollection:
       if self.use_cache:
         if not os.path.exists(self.cache_dir): 
           os.makedirs(self.cache_dir)
-        with open(manifest_cache, "w", encoding="utf-8") as f:
+        with open(manifest_cache, "w", encoding="utf-8", newline="") as f:
           f.write(raw_text)
 
     except Exception as e:
@@ -627,7 +627,9 @@ class RiggingToolsCollection:
         cmds.inViewMessage(amg=f"Caching {module_name}...", pos="midCenter", fade=True)
         try:
           source_code = self._download_text(remote_url, timeout=8)
-          with open(cached_tool_path, "w", encoding="utf-8") as f:
+          # newline="" keeps the file's own line endings; without it Windows
+          # doubles CRLF endings and breaks lines ending in a backslash
+          with open(cached_tool_path, "w", encoding="utf-8", newline="") as f:
             f.write(source_code)
         except Exception as e:
           return cmds.warning(f"Download failed for {module_name} - {_describe_http_error(e, bool(self.GITHUB_TOKEN), self.key_mode)}")
